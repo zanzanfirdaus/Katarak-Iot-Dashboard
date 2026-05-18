@@ -322,7 +322,10 @@ export default function App() {
 
         {/* Upload Area */}
         <div className="mx-4 mb-4">
-          <label className="flex flex-col items-center justify-center gap-3 p-6 border-2 border-dashed border-[#243044] rounded-xl cursor-pointer hover:border-[#34d399] hover:bg-[#0d2e24]/20 transition-all">
+          <div
+            className="flex flex-col items-center justify-center gap-3 p-6 border-2 border-dashed border-[#243044] rounded-xl cursor-pointer hover:border-[#34d399] hover:bg-[#0d2e24]/20 transition-all"
+            onClick={() => document.getElementById('fileInput')?.click()}
+          >
             <div className="w-12 h-12 rounded-full bg-[#0d2e24] flex items-center justify-center">
               <Camera size={22} className="text-[#34d399]" />
             </div>
@@ -330,13 +333,14 @@ export default function App() {
               <p className="text-[13px] text-gray-300" style={{ fontWeight: 600 }}>Klik untuk upload foto mata</p>
               <p className="text-[11px] text-gray-500 mt-1">JPG, PNG, JPEG — Maks 10MB</p>
             </div>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={handleUpload}
-              className="hidden"
-            />
-          </label>
+          </div>
+          <input
+            id="fileInput"
+            type="file"
+            accept="image/*"
+            onChange={handleUpload}
+            className="hidden"
+          />
         </div>
 
         {/* Preview Foto */}

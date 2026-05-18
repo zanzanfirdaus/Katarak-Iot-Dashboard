@@ -1,7 +1,12 @@
 import { useState, useEffect } from "react";
-import { Eye, Wifi, WifiOff, Clock, Camera, RefreshCw, ChevronRight, Activity, Cpu, BarChart2, AlertCircle, CheckCircle2, Info } from "lucide-react";
+import { Eye, Wifi, WifiOff, Clock, Camera, RefreshCw, ChevronRight, Activity, Cpu, BarChart2, AlertCircle, CheckCircle2, Info, Upload } from "lucide-react";
 import { ImageWithFallback } from "./components/figma/ImageWithFallback";
 import cataractImg from "figma:asset/2ceb8a4f8fa5d490847a95f8070bade231855497.png";
+
+// =============================================
+// GANTI INI DENGAN LINK RAILWAY KAMU!
+// =============================================
+const API_URL = "https://web-production-08f648.up.railway.app";
 
 // --- Mock Data ---
 const eyeImages = [
@@ -66,8 +71,20 @@ export default function App() {
   const [connected, setConnected] = useState(true);
   const [selectedImg, setSelectedImg] = useState(eyeImages[0]);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<"latest" | "history" | "stats">("latest");
+  const [activeTab, setActiveTab] = useState<"latest" | "history" | "stats" | "upload">("latest");
   const now = useCurrentTime();
+
+  // ===== STATE UPLOAD =====
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<null | {
+    label: string;
+    confidence: number;
+    normal?: number;
+    immature?: number;
+    mature?: number;
+  }>(null);
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const timeStr = now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const dateStr = now.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
@@ -75,6 +92,39 @@ export default function App() {
   const handleRefresh = () => {
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 1500);
+  };
+
+  // ===== FUNGSI UPLOAD FOTO KE API =====
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Preview foto yang diupload
+    const objectUrl = URL.createObjectURL(file);
+    setUploadedImageUrl(objectUrl);
+    setUploadResult(null);
+    setUploadError(null);
+    setUploading(true);
+
+    const formData = new FormData();
+    formData.append("image", file);
+
+    try {
+      const res = await fetch(`${API_URL}/predict`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error("Gagal konek ke API");
+
+      const data = await res.json();
+      setUploadResult(data);
+    } catch (err) {
+      setUploadError("Gagal konek ke API Railway. Pastikan API aktif!");
+      console.error(err);
+    } finally {
+      setUploading(false);
+    }
   };
 
   const stats = {
@@ -260,6 +310,104 @@ export default function App() {
     </div>
   );
 
+  // ===== UPLOAD CARD =====
+  const UploadCard = () => {
+    const resultColors = uploadResult ? getLabelColor(uploadResult.label) : null;
+    return (
+      <div className="bg-[#1a2332] rounded-2xl shadow-lg overflow-hidden border border-[#243044]">
+        <div className="px-4 pt-4 pb-3 flex items-center gap-2">
+          <Upload size={18} className="text-[#34d399]" />
+          <h2 className="text-[15px] text-gray-200">Uji Foto Manual</h2>
+        </div>
+
+        {/* Upload Area */}
+        <div className="mx-4 mb-4">
+          <label className="flex flex-col items-center justify-center gap-3 p-6 border-2 border-dashed border-[#243044] rounded-xl cursor-pointer hover:border-[#34d399] hover:bg-[#0d2e24]/20 transition-all">
+            <div className="w-12 h-12 rounded-full bg-[#0d2e24] flex items-center justify-center">
+              <Camera size={22} className="text-[#34d399]" />
+            </div>
+            <div className="text-center">
+              <p className="text-[13px] text-gray-300" style={{ fontWeight: 600 }}>Klik untuk upload foto mata</p>
+              <p className="text-[11px] text-gray-500 mt-1">JPG, PNG, JPEG — Maks 10MB</p>
+            </div>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleUpload}
+              className="hidden"
+            />
+          </label>
+        </div>
+
+        {/* Preview Foto */}
+        {uploadedImageUrl && (
+          <div className="mx-4 mb-4">
+            <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Preview Foto</p>
+            <div className="rounded-xl overflow-hidden bg-gray-950" style={{ aspectRatio: "4/3" }}>
+              <img src={uploadedImageUrl} alt="Upload preview" className="w-full h-full object-cover" />
+            </div>
+          </div>
+        )}
+
+        {/* Loading */}
+        {uploading && (
+          <div className="mx-4 mb-4 flex items-center gap-3 px-4 py-3 bg-[#111a27] rounded-xl border border-[#243044]">
+            <div className="w-4 h-4 border-2 border-[#34d399] border-t-transparent rounded-full animate-spin"></div>
+            <span className="text-[13px] text-[#34d399]">Menganalisis foto ke API...</span>
+          </div>
+        )}
+
+        {/* Error */}
+        {uploadError && (
+          <div className="mx-4 mb-4 px-4 py-3 bg-red-900/30 rounded-xl border border-red-800">
+            <p className="text-[13px] text-red-400">{uploadError}</p>
+          </div>
+        )}
+
+        {/* Hasil */}
+        {uploadResult && resultColors && (
+          <div className="mx-4 mb-4">
+            <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Hasil Analisis AI</p>
+            <div className={`flex items-center gap-2 px-3 py-3 rounded-xl border ${resultColors.bg} ${resultColors.border} mb-3`}>
+              <span className={`w-3 h-3 rounded-full ${resultColors.dot}`}></span>
+              <div className="flex items-center gap-1.5">
+                {getLabelIcon(uploadResult.label)}
+                <span className={`text-[15px] ${resultColors.text}`} style={{ fontWeight: 700 }}>
+                  {uploadResult.label === "Normal" ? "Mata Normal" : uploadResult.label === "Immature" ? "Katarak Immature" : "Katarak Mature"}
+                </span>
+              </div>
+              <span className={`ml-auto text-[13px] ${resultColors.text}`} style={{ fontWeight: 600 }}>
+                {uploadResult.confidence.toFixed(1)}%
+              </span>
+            </div>
+
+            {/* Confidence bars jika ada detail */}
+            {(uploadResult.normal !== undefined) && (
+              <>
+                <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Distribusi Kepercayaan</p>
+                {[
+                  { key: "normal", label: "Normal", value: uploadResult.normal ?? 0, color: "bg-emerald-500" },
+                  { key: "immature", label: "Immature", value: uploadResult.immature ?? 0, color: "bg-amber-500" },
+                  { key: "mature", label: "Mature", value: uploadResult.mature ?? 0, color: "bg-red-500" },
+                ].map((item) => (
+                  <div key={item.key} className="mb-2">
+                    <div className="flex justify-between mb-1">
+                      <span className="text-[12px] text-gray-400">{item.label}</span>
+                      <span className="text-[12px] text-gray-300" style={{ fontWeight: 600 }}>{item.value.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-[#111a27] overflow-hidden">
+                      <div className={`h-full rounded-full ${item.color} transition-all duration-700`} style={{ width: `${item.value}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const HistoryCard = () => (
     <div className="bg-[#1a2332] rounded-2xl shadow-lg overflow-hidden border border-[#243044]">
       <div className="px-4 pt-4 pb-2 flex items-center justify-between">
@@ -377,6 +525,7 @@ export default function App() {
         { key: "latest", label: "Tangkapan", icon: <Camera size={13} /> },
         { key: "history", label: "Riwayat", icon: <RefreshCw size={13} /> },
         { key: "stats", label: "Statistik", icon: <BarChart2 size={13} /> },
+        { key: "upload", label: "Uji Foto", icon: <Upload size={13} /> },
       ].map((tab) => (
         <button
           key={tab.key}
@@ -418,6 +567,12 @@ export default function App() {
           )}
           {activeTab === "history" && <HistoryCard />}
           {activeTab === "stats" && <StatsCards />}
+          {activeTab === "upload" && (
+            <>
+              <UploadCard />
+              <KeteranganCard />
+            </>
+          )}
           <Footer />
         </div>
       </div>
@@ -443,7 +598,6 @@ export default function App() {
             </span>
             <span className="text-[13px] text-gray-500 ml-2">— Berbasis IoT · ESP32-CAM</span>
           </div>
-          {/* Right meta */}
           <div className="flex items-center gap-3">
             <button
               onClick={() => setConnected(!connected)}
@@ -467,6 +621,7 @@ export default function App() {
             { key: "latest", label: "Tangkapan Foto", icon: <Camera size={14} /> },
             { key: "history", label: "Riwayat", icon: <RefreshCw size={14} /> },
             { key: "stats", label: "Statistik", icon: <BarChart2 size={14} /> },
+            { key: "upload", label: "Uji Foto Manual", icon: <Upload size={14} /> },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -486,12 +641,9 @@ export default function App() {
         {/* Desktop Content */}
         <div className="flex-1 px-8 py-6 overflow-auto">
 
-          {/* LATEST TAB — Desktop 2-column */}
           {activeTab === "latest" && (
             <div className="grid grid-cols-2 gap-6 max-w-6xl mx-auto">
-              {/* Left Column */}
               <div className="flex flex-col gap-5">
-                {/* Image Card */}
                 <div className="bg-[#1a2332] rounded-2xl shadow-lg overflow-hidden border border-[#243044]">
                   <div className="px-5 pt-5 pb-3 flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -506,11 +658,7 @@ export default function App() {
                     </button>
                   </div>
                   <div className="mx-5 rounded-xl overflow-hidden bg-gray-950 relative" style={{ aspectRatio: "4/3" }}>
-                    <ImageWithFallback
-                      src={selectedImg.url}
-                      alt="ESP32-CAM capture"
-                      className="w-full h-full object-cover"
-                    />
+                    <ImageWithFallback src={selectedImg.url} alt="ESP32-CAM capture" className="w-full h-full object-cover" />
                     <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-3 py-2" style={{ background: "linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)" }}>
                       <div className="flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
@@ -546,9 +694,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right Column */}
               <div className="flex flex-col gap-5">
-                {/* Classification */}
                 <div className="bg-[#1a2332] rounded-2xl shadow-lg p-5 border border-[#243044]">
                   <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-3">Hasil Klasifikasi</p>
                   <div className={`flex items-center gap-2 px-4 py-3 rounded-xl mb-4 border ${labelColors.bg} ${labelColors.border}`}>
@@ -580,8 +726,6 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-
-                {/* Device Info */}
                 <div className="bg-[#1a2332] rounded-2xl shadow-lg p-5 border border-[#243044]">
                   <div className="flex items-center gap-2 mb-3">
                     <Cpu size={15} className="text-[#34d399]" />
@@ -602,8 +746,6 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-
-                {/* Keterangan */}
                 <div className="bg-[#1a2332] rounded-2xl shadow-lg p-5 border border-[#243044]">
                   <div className="flex items-center gap-2 mb-3">
                     <Info size={15} className="text-[#38bdf8]" />
@@ -627,7 +769,6 @@ export default function App() {
             </div>
           )}
 
-          {/* HISTORY TAB — Desktop wide */}
           {activeTab === "history" && (
             <div className="max-w-6xl mx-auto">
               <div className="bg-[#1a2332] rounded-2xl shadow-lg overflow-hidden border border-[#243044]">
@@ -675,7 +816,6 @@ export default function App() {
             </div>
           )}
 
-          {/* STATS TAB — Desktop wide */}
           {activeTab === "stats" && (
             <div className="max-w-6xl mx-auto">
               <div className="grid grid-cols-4 gap-4 mb-6">
@@ -740,7 +880,33 @@ export default function App() {
             </div>
           )}
 
-          {/* Desktop Footer */}
+          {/* UPLOAD TAB — Desktop */}
+          {activeTab === "upload" && (
+            <div className="grid grid-cols-2 gap-6 max-w-6xl mx-auto">
+              <UploadCard />
+              <div className="flex flex-col gap-5">
+                <KeteranganCard />
+                <div className="bg-[#1a2332] rounded-2xl p-5 border border-[#243044]">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Info size={15} className="text-[#38bdf8]" />
+                    <h3 className="text-[14px] text-gray-300">Cara Penggunaan</h3>
+                  </div>
+                  {[
+                    "Klik area upload dan pilih foto mata",
+                    "Foto akan dikirim ke API Railway",
+                    "AI akan menganalisis tingkat katarak",
+                    "Hasil ditampilkan dalam detik",
+                  ].map((step, i) => (
+                    <div key={i} className="flex items-start gap-3 mb-3">
+                      <span className="w-5 h-5 rounded-full bg-[#0d2e24] border border-[#1a5c42] flex items-center justify-center text-[11px] text-[#34d399] shrink-0" style={{ fontWeight: 700 }}>{i + 1}</span>
+                      <span className="text-[12px] text-gray-400">{step}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="mt-6 flex items-center justify-center gap-1.5 max-w-6xl mx-auto">
             <Eye size={12} className="text-[#34d399]" />
             <p className="text-[11px] text-gray-600">Deteksi Katarak IoT — ESP32-CAM · 2026</p>

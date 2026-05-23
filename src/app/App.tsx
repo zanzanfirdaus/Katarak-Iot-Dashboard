@@ -443,7 +443,7 @@ export default function App() {
           </div>
           {[
             { label: "Mikrokontroler",      value: "ESP32-CAM"              },
-            { label: "Modul Kamera",        value: "OV2640 (2MP)"           },
+            { label: "Modul Kamera",        value: "OV3660 (3MP)"           },
             { label: "Metode Klasifikasi",  value: "CNN (TensorFlow/Keras)" },
             { label: "Database",            value: "MySQL (Railway)"        },
             { label: "Kategori",            value: "Normal · Immature · Mature" },

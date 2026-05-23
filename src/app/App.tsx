@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Eye, Wifi, WifiOff, Clock, Camera, RefreshCw, ChevronRight, Activity, Cpu, BarChart2, AlertCircle, CheckCircle2, Info } from "lucide-react";
+import { Eye, Wifi, WifiOff, Clock, Camera, RefreshCw, ChevronRight, Activity, Cpu, BarChart2, AlertCircle, CheckCircle2, Info, ImageOff, Zap } from "lucide-react";
 import { ImageWithFallback } from "./components/figma/ImageWithFallback";
 import cataractImg from "figma:asset/2ceb8a4f8fa5d490847a95f8070bade231855497.png";
 
@@ -16,6 +16,7 @@ type PredictResult = {
   immature: number;
   mature: number;
   waktu: string;
+  image_url?: string; // URL foto dari server jika tersedia
 };
 
 type HistoryRow = {
@@ -26,6 +27,7 @@ type HistoryRow = {
   mat_pct: number;
   confidence: number;
   waktu: string;
+  image_url?: string;
 };
 
 type StatsData = {
@@ -33,6 +35,19 @@ type StatsData = {
   Immature: number;
   Mature: number;
   total: number;
+};
+
+type LatestCapture = {
+  id: number;
+  prediksi: string;
+  label: string;
+  confidence: number;
+  normal: number;
+  immature: number;
+  mature: number;
+  waktu: string;
+  image_url?: string;
+  image_base64?: string; // base64 foto dari ESP32-CAM
 };
 
 // ── Helpers ───────────────────────────────────────────────
@@ -69,11 +84,12 @@ export default function App() {
   const [refreshing, setRefreshing]   = useState(false);
   const now = useCurrentTime();
 
-  // ── State Tangkapan (predict) ─────────────────────────
-  const [predicting, setPredicting]   = useState(false);
-  const [predictResult, setPredictResult] = useState<PredictResult | null>(null);
-  const [predictError, setPredictError]   = useState<string | null>(null);
-  const [previewUrl, setPreviewUrl]       = useState<string | null>(null);
+  // ── State Tangkapan Terbaru (dari ESP32-CAM via API) ──
+  const [latestCapture, setLatestCapture]   = useState<LatestCapture | null>(null);
+  const [captureLoading, setCaptureLoading] = useState(false);
+  const [captureError, setCaptureError]     = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh]       = useState(false);
+  const [lastFetched, setLastFetched]       = useState<Date | null>(null);
 
   // ── State Riwayat ─────────────────────────────────────
   const [history, setHistory]         = useState<HistoryRow[]>([]);
@@ -92,6 +108,62 @@ export default function App() {
     fetch(`${API_URL}/`)
       .then(r => { if (r.ok) setConnected(true); })
       .catch(() => setConnected(false));
+  }, []);
+
+  // ── Ambil tangkapan terbaru dari API ─────────────────
+  // Mencoba endpoint /latest dulu, fallback ke /history?limit=1
+  const fetchLatestCapture = useCallback(async () => {
+    setCaptureLoading(true);
+    setCaptureError(null);
+    try {
+      // Coba endpoint /latest terlebih dahulu
+      let data: LatestCapture | null = null;
+
+      try {
+        const res = await fetch(`${API_URL}/latest`);
+        if (res.ok) {
+          data = await res.json();
+        }
+      } catch {
+        // fallback ke /history?limit=1
+      }
+
+      // Fallback: ambil data pertama dari /history
+      if (!data) {
+        const res = await fetch(`${API_URL}/history?limit=1`);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const json = await res.json();
+        const rows: HistoryRow[] = json.data ?? [];
+        if (rows.length > 0) {
+          const row = rows[0];
+          data = {
+            id:         row.id,
+            prediksi:   row.prediksi,
+            label:      row.prediksi,
+            confidence: row.confidence,
+            normal:     row.normal_pct,
+            immature:   row.imm_pct,
+            mature:     row.mat_pct,
+            waktu:      row.waktu,
+            image_url:  row.image_url,
+          };
+        }
+      }
+
+      if (data) {
+        setLatestCapture(data);
+        setConnected(true);
+        setLastFetched(new Date());
+      } else {
+        setCaptureError("Belum ada data tangkapan di database.");
+      }
+    } catch (err) {
+      setCaptureError("Gagal mengambil data dari API Railway.");
+      setConnected(false);
+      console.error(err);
+    } finally {
+      setCaptureLoading(false);
+    }
   }, []);
 
   // ── Ambil riwayat dari MySQL ──────────────────────────
@@ -116,51 +188,41 @@ export default function App() {
     finally { setStatsLoading(false); }
   }, []);
 
-  useEffect(() => { fetchHistory(); fetchStats(); }, [fetchHistory, fetchStats]);
+  useEffect(() => { fetchLatestCapture(); fetchHistory(); fetchStats(); }, [fetchLatestCapture, fetchHistory, fetchStats]);
 
-  // ── Upload foto → predict ─────────────────────────────
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setPreviewUrl(URL.createObjectURL(file));
-    setPredictResult(null);
-    setPredictError(null);
-    setPredicting(true);
-
-    const formData = new FormData();
-    formData.append("foto", file);   // field "foto" sesuai app.py
-
-    try {
-      const res  = await fetch(`${API_URL}/predict`, { method: "POST", body: formData });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data: PredictResult = await res.json();
-      setPredictResult(data);
-      setConnected(true);
-      // Refresh riwayat & statistik otomatis setelah predict berhasil
-      fetchHistory();
+  // ── Auto-refresh setiap 5 detik jika diaktifkan ───────
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(() => {
+      fetchLatestCapture();
       fetchStats();
-    } catch (err) {
-      setPredictError("Gagal konek ke API Railway. Periksa koneksi atau coba lagi.");
-      setConnected(false);
-      console.error(err);
-    } finally {
-      setPredicting(false);
-    }
-  };
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, fetchLatestCapture, fetchStats]);
 
   const handleRefresh = () => {
     setRefreshing(true);
+    fetchLatestCapture();
     fetchHistory();
     fetchStats();
     setTimeout(() => setRefreshing(false), 1200);
   };
 
-  // ── Warna hasil prediksi saat ini ─────────────────────
-  const resultColors = predictResult ? getLabelColor(predictResult.label) : null;
+  // ── Warna hasil tangkapan terkini ─────────────────────
+  const captureColors = latestCapture ? getLabelColor(latestCapture.label) : null;
 
   // ── Warna baris riwayat terpilih ──────────────────────
   const rowColors = selectedRow ? getLabelColor(selectedRow.prediksi) : null;
+
+  // ── Foto URL terbaik (url atau base64) ────────────────
+  const getImageSrc = (capture: LatestCapture | null) => {
+    if (!capture) return null;
+    if (capture.image_base64) return `data:image/jpeg;base64,${capture.image_base64}`;
+    if (capture.image_url)    return capture.image_url;
+    return null;
+  };
+
+  const latestImageSrc = getImageSrc(latestCapture);
 
   // ─────────────────────────────────────────────────────
   //  SHARED SUB-COMPONENTS
@@ -188,99 +250,158 @@ export default function App() {
     </div>
   );
 
-  // ── TAB: Tangkapan (predict) ──────────────────────────
-  const TangkapanContent = () => (
-    <div className="flex flex-col gap-4">
-      {/* Upload area */}
-      <div className="bg-[#1a2332] rounded-2xl shadow-lg overflow-hidden border border-[#243044]">
-        <div className="px-4 pt-4 pb-3 flex items-center gap-2">
+  // ── Komponen: Kartu Foto Tangkapan Terbaru ────────────
+  const LatestCaptureCard = ({ compact = false }: { compact?: boolean }) => (
+    <div className="bg-[#1a2332] rounded-2xl shadow-lg overflow-hidden border border-[#243044]">
+      {/* Header */}
+      <div className={`${compact ? "px-4 pt-4 pb-3" : "px-5 pt-5 pb-3"} flex items-center justify-between`}>
+        <div className="flex items-center gap-2">
           <Camera size={18} className="text-[#34d399]" />
-          <h2 className="text-[15px] text-gray-200">Analisis Foto Mata</h2>
+          <h2 className="text-[15px] text-gray-200">Tangkapan Terbaru</h2>
+          {captureLoading && (
+            <div className="w-3.5 h-3.5 border-2 border-[#34d399] border-t-transparent rounded-full animate-spin" />
+          )}
         </div>
+        <div className="flex items-center gap-2">
+          {/* Auto-refresh toggle */}
+          <button
+            onClick={() => setAutoRefresh(v => !v)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] transition-all ${
+              autoRefresh
+                ? "bg-[#0d2e24] border-[#34d399] text-[#34d399]"
+                : "bg-[#111a27] border-[#243044] text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            <Zap size={10} className={autoRefresh ? "animate-pulse" : ""} />
+            {autoRefresh ? "Live" : "Auto"}
+          </button>
+          {/* Manual refresh */}
+          <button
+            onClick={fetchLatestCapture}
+            className="w-7 h-7 rounded-full bg-[#0d2e24] flex items-center justify-center hover:bg-[#1a5c42] transition-colors"
+          >
+            <RefreshCw size={12} className={`text-[#34d399] ${captureLoading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+      </div>
 
-        <div className="mx-4 mb-4">
-          <div className="flex flex-col items-center justify-center gap-3 p-6 border-2 border-dashed border-[#34d399] rounded-xl bg-[#0d2e24]/20">
-            <div className="w-12 h-12 rounded-full bg-[#0d2e24] flex items-center justify-center">
-              <Camera size={22} className="text-[#34d399]" />
+      {/* Foto */}
+      <div className={`${compact ? "mx-4" : "mx-5"} mb-3`}>
+        <div className="rounded-xl overflow-hidden bg-[#0b1120] border border-[#243044]" style={{ aspectRatio: "4/3" }}>
+          {captureLoading && !latestCapture ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-3">
+              <div className="w-8 h-8 border-2 border-[#34d399] border-t-transparent rounded-full animate-spin" />
+              <span className="text-[12px] text-gray-500">Mengambil foto dari ESP32-CAM...</span>
             </div>
-            <p className="text-[13px] text-gray-300" style={{ fontWeight: 600 }}>Pilih foto mata untuk dianalisis</p>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={handleUpload}
-              style={{ display: "block" }}
-              className="text-[12px] text-gray-400 w-full"
+          ) : captureError && !latestCapture ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-3 px-4 text-center">
+              <ImageOff size={28} className="text-gray-600" />
+              <span className="text-[12px] text-gray-500">{captureError}</span>
+            </div>
+          ) : latestImageSrc ? (
+            <img
+              src={latestImageSrc}
+              alt={`Tangkapan #${latestCapture?.id}`}
+              className="w-full h-full object-cover"
             />
-          </div>
+          ) : (
+            /* Foto tidak tersedia — tampilkan info hasil saja */
+            <div className="w-full h-full flex flex-col items-center justify-center gap-3 px-4 text-center">
+              <div className="w-14 h-14 rounded-full bg-[#111a27] border border-[#243044] flex items-center justify-center">
+                <Eye size={22} className="text-[#34d399]" />
+              </div>
+              <div>
+                <p className="text-[12px] text-gray-400" style={{ fontWeight: 600 }}>
+                  {latestCapture ? `Tangkapan #${latestCapture.id}` : "Belum ada data"}
+                </p>
+                <p className="text-[11px] text-gray-600 mt-0.5">
+                  Foto tidak tersimpan di server
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Preview */}
-        {previewUrl && (
-          <div className="mx-4 mb-4">
-            <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Preview Foto</p>
-            <div className="rounded-xl overflow-hidden bg-gray-950" style={{ aspectRatio: "4/3" }}>
-              <img src={previewUrl} alt="preview" className="w-full h-full object-cover" />
-            </div>
-          </div>
-        )}
-
-        {/* Loading */}
-        {predicting && (
-          <div className="mx-4 mb-4 flex items-center gap-3 px-4 py-3 bg-[#111a27] rounded-xl border border-[#243044]">
-            <div className="w-4 h-4 border-2 border-[#34d399] border-t-transparent rounded-full animate-spin"></div>
-            <span className="text-[13px] text-[#34d399]">Menganalisis foto ke API Railway...</span>
-          </div>
-        )}
-
-        {/* Error */}
-        {predictError && (
-          <div className="mx-4 mb-4 px-4 py-3 bg-red-900/30 rounded-xl border border-red-800">
-            <p className="text-[13px] text-red-400">{predictError}</p>
-          </div>
-        )}
-
-        {/* Hasil predict */}
-        {predictResult && resultColors && (
-          <div className="mx-4 mb-4">
-            <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Hasil Analisis ML</p>
-            <div className={`flex items-center gap-2 px-3 py-3 rounded-xl border ${resultColors.bg} ${resultColors.border} mb-3`}>
-              <span className={`w-3 h-3 rounded-full ${resultColors.dot}`}></span>
-              <div className="flex items-center gap-1.5">
-                {getLabelIcon(predictResult.label)}
-                <span className={`text-[15px] ${resultColors.text}`} style={{ fontWeight: 700 }}>
-                  {labelDisplay(predictResult.label)}
-                </span>
-              </div>
-              <span className={`ml-auto text-[13px] ${resultColors.text}`} style={{ fontWeight: 600 }}>
-                {predictResult.confidence.toFixed(1)}%
+        {/* Badge ID + waktu */}
+        {latestCapture && (
+          <div className="flex items-center justify-between mt-2 px-1">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-gray-600 bg-[#111a27] border border-[#243044] px-2 py-0.5 rounded-full">
+                #{latestCapture.id}
               </span>
+              {autoRefresh && (
+                <span className="text-[10px] text-[#34d399] bg-[#0d2e24] border border-[#1a5c42] px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#34d399] animate-pulse"></span>
+                  LIVE
+                </span>
+              )}
             </div>
-
-            <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Distribusi Kepercayaan</p>
-            {[
-              { key: "normal",   label: "Normal",   value: predictResult.normal,   color: "bg-emerald-500" },
-              { key: "immature", label: "Immature", value: predictResult.immature, color: "bg-amber-500"   },
-              { key: "mature",   label: "Mature",   value: predictResult.mature,   color: "bg-red-500"     },
-            ].map(item => (
-              <div key={item.key} className="mb-2">
-                <div className="flex justify-between mb-1">
-                  <span className="text-[12px] text-gray-400">{item.label}</span>
-                  <span className="text-[12px] text-gray-300" style={{ fontWeight: 600 }}>{item.value.toFixed(1)}%</span>
-                </div>
-                <div className="h-2 rounded-full bg-[#111a27] overflow-hidden">
-                  <div className={`h-full rounded-full ${item.color} transition-all duration-700`} style={{ width: `${item.value}%` }} />
-                </div>
-              </div>
-            ))}
-
-            <div className="mt-3 flex items-center gap-2 text-[11px] text-gray-500">
-              <Clock size={10} /> {predictResult.waktu}
-              {predictResult.id && <span className="ml-auto text-[#34d399]">✓ Tersimpan ke DB #{predictResult.id}</span>}
-            </div>
+            <span className="text-[10px] text-gray-600 flex items-center gap-1">
+              <Clock size={9} /> {latestCapture.waktu}
+            </span>
           </div>
         )}
       </div>
 
+      {/* Hasil klasifikasi */}
+      {latestCapture && captureColors && (
+        <div className={`${compact ? "mx-4 mb-4" : "mx-5 mb-5"}`}>
+          <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Hasil Klasifikasi ML</p>
+          <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border ${captureColors.bg} ${captureColors.border} mb-3`}>
+            <span className={`w-3 h-3 rounded-full ${captureColors.dot}`}></span>
+            <div className="flex items-center gap-1.5">
+              {getLabelIcon(latestCapture.label)}
+              <span className={`text-[14px] ${captureColors.text}`} style={{ fontWeight: 700 }}>
+                {labelDisplay(latestCapture.label)}
+              </span>
+            </div>
+            <span className={`ml-auto text-[13px] ${captureColors.text}`} style={{ fontWeight: 600 }}>
+              {latestCapture.confidence.toFixed(1)}%
+            </span>
+          </div>
+
+          {/* Distribusi */}
+          {[
+            { key: "normal",   label: "Normal",   value: latestCapture.normal,   color: "bg-emerald-500" },
+            { key: "immature", label: "Immature", value: latestCapture.immature, color: "bg-amber-500"   },
+            { key: "mature",   label: "Mature",   value: latestCapture.mature,   color: "bg-red-500"     },
+          ].map(item => (
+            <div key={item.key} className="mb-2">
+              <div className="flex justify-between mb-1">
+                <span className="text-[12px] text-gray-400">{item.label}</span>
+                <span className="text-[12px] text-gray-300" style={{ fontWeight: 600 }}>{item.value.toFixed(1)}%</span>
+              </div>
+              <div className="h-2 rounded-full bg-[#111a27] overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${item.color} transition-all duration-700`}
+                  style={{ width: `${item.value}%` }}
+                />
+              </div>
+            </div>
+          ))}
+
+          {lastFetched && (
+            <p className="text-[10px] text-gray-600 mt-2 flex items-center gap-1">
+              <RefreshCw size={9} />
+              Diperbarui: {lastFetched.toLocaleTimeString("id-ID")}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Error banner (non-blocking) */}
+      {captureError && latestCapture && (
+        <div className={`${compact ? "mx-4 mb-4" : "mx-5 mb-5"} px-3 py-2 bg-amber-900/20 border border-amber-800 rounded-xl`}>
+          <p className="text-[11px] text-amber-400">{captureError}</p>
+        </div>
+      )}
+    </div>
+  );
+
+  // ── TAB: Tangkapan ────────────────────────────────────
+  const TangkapanContent = () => (
+    <div className="flex flex-col gap-4">
+      <LatestCaptureCard />
       <KeteranganCard />
     </div>
   );
@@ -312,7 +433,7 @@ export default function App() {
         )}
 
         {!histLoading && history.length === 0 && (
-          <div className="text-center py-8 text-gray-500 text-[13px]">Belum ada data. Upload foto dulu!</div>
+          <div className="text-center py-8 text-gray-500 text-[13px]">Belum ada data riwayat.</div>
         )}
 
         <div className="divide-y divide-[#1e2d40]">
@@ -613,94 +734,14 @@ export default function App() {
           {/* TANGKAPAN — Desktop 2 kolom */}
           {activeTab === "latest" && (
             <div className="grid grid-cols-2 gap-6 max-w-6xl mx-auto">
-              {/* Kiri: upload + preview */}
+              {/* Kiri: foto tangkapan terbaru */}
               <div className="flex flex-col gap-5">
-                <div className="bg-[#1a2332] rounded-2xl shadow-lg overflow-hidden border border-[#243044]">
-                  <div className="px-5 pt-5 pb-3 flex items-center gap-2">
-                    <Camera size={18} className="text-[#34d399]" />
-                    <h2 className="text-[15px] text-gray-200">Analisis Foto Mata</h2>
-                  </div>
-                  <div className="mx-5 mb-5">
-                    <div className="flex flex-col items-center gap-3 p-6 border-2 border-dashed border-[#34d399] rounded-xl bg-[#0d2e24]/20">
-                      <div className="w-12 h-12 rounded-full bg-[#0d2e24] flex items-center justify-center">
-                        <Camera size={22} className="text-[#34d399]" />
-                      </div>
-                      <p className="text-[13px] text-gray-300" style={{ fontWeight: 600 }}>Pilih foto mata untuk dianalisis</p>
-                      <input type="file" accept="image/*" onChange={handleUpload}
-                        style={{ display: "block" }} className="text-[12px] text-gray-400 w-full" />
-                    </div>
-                  </div>
-
-                  {previewUrl && (
-                    <div className="mx-5 mb-5">
-                      <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Preview Foto</p>
-                      <div className="rounded-xl overflow-hidden bg-gray-950" style={{ aspectRatio: "4/3" }}>
-                        <img src={previewUrl} alt="preview" className="w-full h-full object-cover" />
-                      </div>
-                    </div>
-                  )}
-
-                  {predicting && (
-                    <div className="mx-5 mb-5 flex items-center gap-3 px-4 py-3 bg-[#111a27] rounded-xl border border-[#243044]">
-                      <div className="w-4 h-4 border-2 border-[#34d399] border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-[13px] text-[#34d399]">Menganalisis foto ke API Railway...</span>
-                    </div>
-                  )}
-
-                  {predictError && (
-                    <div className="mx-5 mb-5 px-4 py-3 bg-red-900/30 rounded-xl border border-red-800">
-                      <p className="text-[13px] text-red-400">{predictError}</p>
-                    </div>
-                  )}
-                </div>
-                <KeteranganCard />
+                <LatestCaptureCard />
               </div>
 
-              {/* Kanan: hasil predict */}
+              {/* Kanan: keterangan + info perangkat */}
               <div className="flex flex-col gap-5">
-                {predictResult && resultColors ? (
-                  <div className="bg-[#1a2332] rounded-2xl shadow-lg p-5 border border-[#243044]">
-                    <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-3">Hasil Analisis ML</p>
-                    <div className={`flex items-center gap-2 px-4 py-3 rounded-xl mb-4 border ${resultColors.bg} ${resultColors.border}`}>
-                      <span className={`w-3 h-3 rounded-full ${resultColors.dot}`}></span>
-                      <div className="flex items-center gap-1.5">
-                        {getLabelIcon(predictResult.label)}
-                        <span className={`text-[16px] ${resultColors.text}`} style={{ fontWeight: 700 }}>
-                          {labelDisplay(predictResult.label)}
-                        </span>
-                      </div>
-                      <span className={`ml-auto text-[14px] ${resultColors.text}`} style={{ fontWeight: 700 }}>
-                        {predictResult.confidence.toFixed(1)}%
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-3">Distribusi Kepercayaan</p>
-                    {[
-                      { key: "normal",   label: "Normal",   value: predictResult.normal,   color: "bg-emerald-500" },
-                      { key: "immature", label: "Immature", value: predictResult.immature, color: "bg-amber-500"   },
-                      { key: "mature",   label: "Mature",   value: predictResult.mature,   color: "bg-red-500"     },
-                    ].map(item => (
-                      <div key={item.key} className="mb-3">
-                        <div className="flex justify-between mb-1">
-                          <span className="text-[13px] text-gray-400">{item.label}</span>
-                          <span className="text-[13px] text-gray-300" style={{ fontWeight: 600 }}>{item.value.toFixed(1)}%</span>
-                        </div>
-                        <div className="h-2.5 rounded-full bg-[#111a27] overflow-hidden">
-                          <div className={`h-full rounded-full ${item.color} transition-all duration-700`} style={{ width: `${item.value}%` }} />
-                        </div>
-                      </div>
-                    ))}
-                    <div className="mt-3 flex items-center gap-2 text-[11px] text-gray-500 border-t border-[#243044] pt-3">
-                      <Clock size={10} /> {predictResult.waktu}
-                      {predictResult.id && <span className="ml-auto text-[#34d399]">✓ DB #{predictResult.id}</span>}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-[#1a2332] rounded-2xl p-8 border border-[#243044] flex flex-col items-center justify-center gap-3 text-center">
-                    <Eye size={32} className="text-[#243044]" />
-                    <p className="text-[14px] text-gray-500">Upload foto mata untuk melihat hasil analisis ML</p>
-                  </div>
-                )}
-
+                <KeteranganCard />
                 {/* Info perangkat */}
                 <div className="bg-[#1a2332] rounded-2xl shadow-lg p-5 border border-[#243044]">
                   <div className="flex items-center gap-2 mb-3">
@@ -711,7 +752,9 @@ export default function App() {
                     { label: "Device",           value: "ESP32-CAM"        },
                     { label: "Resolusi Kamera",  value: "OV3660 — 2048x1536" },
                     { label: "Total Deteksi DB", value: `${statsData?.total ?? 0} data` },
+                    { label: "Tangkapan #",      value: latestCapture ? `#${latestCapture.id}` : "—" },
                     { label: "Status MySQL",     value: connected ? "Terhubung ✓" : "Belum terhubung" },
+                    { label: "Auto-Refresh",     value: autoRefresh ? "Aktif (5 detik)" : "Nonaktif" },
                   ].map(item => (
                     <div key={item.label} className="flex items-center justify-between py-1.5 border-b border-[#243044] last:border-0">
                       <div className="flex items-center gap-2">
@@ -751,7 +794,7 @@ export default function App() {
                 )}
 
                 {!histLoading && history.length === 0 && (
-                  <div className="text-center py-10 text-gray-500">Belum ada data. Upload foto dulu!</div>
+                  <div className="text-center py-10 text-gray-500">Belum ada data riwayat.</div>
                 )}
 
                 <div className="grid grid-cols-2 divide-x divide-[#1e2d40]">

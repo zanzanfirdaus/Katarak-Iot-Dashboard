@@ -709,7 +709,7 @@ export default function App() {
                   </div>
                   {[
                     { label: "Device",           value: "ESP32-CAM"        },
-                    { label: "Resolusi Kamera",  value: "OV2640 — 1600×1200" },
+                    { label: "Resolusi Kamera",  value: "OV3660 — 2048x1536" },
                     { label: "Total Deteksi DB", value: `${statsData?.total ?? 0} data` },
                     { label: "Status MySQL",     value: connected ? "Terhubung ✓" : "Belum terhubung" },
                   ].map(item => (
@@ -875,7 +875,7 @@ export default function App() {
                   </div>
                   {[
                     { label: "Mikrokontroler",     value: "ESP32-CAM"              },
-                    { label: "Modul Kamera",       value: "OV2640 (2MP)"           },
+                    { label: "Modul Kamera",       value: "OV3660 (3MP)"           },
                     { label: "Metode Klasifikasi", value: "CNN (TensorFlow/Keras)" },
                     { label: "Database",           value: "MySQL (Railway)"        },
                     { label: "Kategori",           value: "Normal · Immature · Mature" },
